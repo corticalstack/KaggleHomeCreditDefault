@@ -4,12 +4,13 @@ import gc
 import time
 from contextlib import contextmanager
 from lightgbm import LGBMClassifier
-from sklearn.metrics import roc_auc_score, roc_curve
+from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import KFold, StratifiedKFold
 import matplotlib.pyplot as plt
 import seaborn as sns
 import warnings
 warnings.simplefilter(action='ignore', category=FutureWarning)
+seed = 1807
 
 @contextmanager
 def timer(title):
@@ -38,6 +39,8 @@ def application_train_test(num_rows = None, nan_as_category = False, drop_first 
     # Optional: Remove 4 applications with XNA CODE_GENDER (train set)
     df = df[df['CODE_GENDER'] != 'XNA']
     
+    docs = [_f for _f in df.columns if 'FLAG_DOC' in _f]
+    live = [_f for _f in df.columns if ('FLAG_' in _f) & ('FLAG_DOC' not in _f) & ('_FLAG_' not in _f)]
 
     # NaN values for DAYS_EMPLOYED: 365.243 -> nan - Associated with pensioner
     df['DAYS_EMPLOYED'].replace(365243, np.nan, inplace= True)    
@@ -46,18 +49,20 @@ def application_train_test(num_rows = None, nan_as_category = False, drop_first 
     inc_by_org = df[['AMT_INCOME_TOTAL', 'ORGANIZATION_TYPE']].groupby('ORGANIZATION_TYPE').median()['AMT_INCOME_TOTAL']
     df['NEW_CREDIT_TO_ANNUITY_RATIO'] = df['AMT_CREDIT'] / df['AMT_ANNUITY']
     df['NEW_CREDIT_TO_GOODS_RATIO'] = df['AMT_CREDIT'] / df['AMT_GOODS_PRICE']
+    df['NEW_DOC_IND_KURT'] = df[docs].kurtosis(axis=1)
+    df['NEW_LIVE_IND_SUM'] = df[live].sum(axis=1)
     df['NEW_INC_PER_CHLD'] = df['AMT_INCOME_TOTAL'] / (1 + df['CNT_CHILDREN'])
     df['NEW_INC_BY_ORG'] = df['ORGANIZATION_TYPE'].map(inc_by_org)
     df['NEW_EMPLOY_TO_BIRTH_RATIO'] = df['DAYS_EMPLOYED'] / df['DAYS_BIRTH']
     df['NEW_ANNUITY_TO_INCOME_RATIO'] = df['AMT_ANNUITY'] / (1 + df['AMT_INCOME_TOTAL'])
-    df['NEW_SOURCES_PROD'] = df['EXT_SOURCE_1'] * df['EXT_SOURCE_2'] * df['EXT_SOURCE_3']
+    df['NEW_EXT_SOURCES_PROD'] = df['EXT_SOURCE_1'] * df['EXT_SOURCE_2'] * df['EXT_SOURCE_3']
     df['NEW_EXT_SOURCES_MEAN'] = df[['EXT_SOURCE_1', 'EXT_SOURCE_2', 'EXT_SOURCE_3']].mean(axis=1)
     df['NEW_SCORES_STD'] = df[['EXT_SOURCE_1', 'EXT_SOURCE_2', 'EXT_SOURCE_3']].std(axis=1)
     df['NEW_SCORES_STD'] = df['NEW_SCORES_STD'].fillna(df['NEW_SCORES_STD'].mean())
     df['NEW_CAR_TO_BIRTH_RATIO'] = df['OWN_CAR_AGE'] / df['DAYS_BIRTH']
     df['NEW_CAR_TO_EMPLOY_RATIO'] = df['OWN_CAR_AGE'] / df['DAYS_EMPLOYED']
     df['NEW_PHONE_TO_BIRTH_RATIO'] = df['DAYS_LAST_PHONE_CHANGE'] / df['DAYS_BIRTH']
-    df['NEW_PHONE_TO_BIRTH_RATIO_EMPLOYER'] = df['DAYS_LAST_PHONE_CHANGE'] / df['DAYS_EMPLOYED']
+    df['NEW_PHONE_TO_EMPLOYED_RATIO'] = df['DAYS_LAST_PHONE_CHANGE'] / df['DAYS_EMPLOYED']
     df['NEW_CREDIT_TO_INCOME_RATIO'] = df['AMT_CREDIT'] / df['AMT_INCOME_TOTAL']
     
     
@@ -66,8 +71,16 @@ def application_train_test(num_rows = None, nan_as_category = False, drop_first 
         df[bin_feature], uniques = pd.factorize(df[bin_feature])
         
     # Categorical features with One-Hot encode
-    df, cat_cols = one_hot_encoder(df, nan_as_category, drop_first = False)
+    df, cat_cols = one_hot_encoder(df, nan_as_category, drop_first = True)
     
+    dropcolum=['FLAG_DOCUMENT_2','FLAG_DOCUMENT_4',
+    'FLAG_DOCUMENT_5','FLAG_DOCUMENT_6','FLAG_DOCUMENT_7',
+    'FLAG_DOCUMENT_8','FLAG_DOCUMENT_9','FLAG_DOCUMENT_10', 
+    'FLAG_DOCUMENT_11','FLAG_DOCUMENT_12','FLAG_DOCUMENT_13',
+    'FLAG_DOCUMENT_14','FLAG_DOCUMENT_15','FLAG_DOCUMENT_16',
+    'FLAG_DOCUMENT_17','FLAG_DOCUMENT_18','FLAG_DOCUMENT_19',
+    'FLAG_DOCUMENT_20','FLAG_DOCUMENT_21']
+    df= df.drop(dropcolum,axis=1)
     
     del test_df
     return df
@@ -76,8 +89,141 @@ def application_train_test(num_rows = None, nan_as_category = False, drop_first 
 def bureau_and_balance(num_rows = None, nan_as_category = True, drop_first = False):
     bureau = pd.read_csv('bureau.csv', nrows = num_rows)
     bb = pd.read_csv('bureau_balance.csv', nrows = num_rows)
-    bb, bb_cat = one_hot_encoder(bb, nan_as_category, drop_first)
-    bureau, bureau_cat = one_hot_encoder(bureau, nan_as_category, drop_first)
+    
+    grp = bureau[['SK_ID_CURR', 'DAYS_CREDIT']].groupby(by = ['SK_ID_CURR'])['DAYS_CREDIT'].count().reset_index().rename(index=str, columns={'DAYS_CREDIT': 'BUREAU_LOAN_COUNT'})
+    bureau = bureau.merge(grp, on = ['SK_ID_CURR'], how = 'left')
+
+    grp = bureau[['SK_ID_CURR', 'CREDIT_TYPE']].groupby(by = ['SK_ID_CURR'])['CREDIT_TYPE'].nunique().reset_index().rename(index=str, columns={'CREDIT_TYPE': 'BUREAU_LOAN_TYPES'})
+    bureau = bureau.merge(grp, on = ['SK_ID_CURR'], how = 'left')
+    
+    # Average Number of Loans per Loan Type
+    bureau['AVERAGE_LOAN_TYPE'] = bureau['BUREAU_LOAN_COUNT']/bureau['BUREAU_LOAN_TYPES']
+    del bureau['BUREAU_LOAN_COUNT'], bureau['BUREAU_LOAN_TYPES']
+    
+    
+    # Create a new dummy column for whether CREDIT is ACTIVE OR CLOED 
+    bureau['CREDIT_ACTIVE_BINARY'] =bureau['CREDIT_ACTIVE']
+
+    def f(x):
+        if x == 'Closed':
+            y = 0
+        else:
+            y = 1    
+        return y
+    
+    bureau['CREDIT_ACTIVE_BINARY'] = bureau.apply(lambda x: f(x.CREDIT_ACTIVE), axis = 1)
+    
+    # Calculate mean number of loans that are ACTIVE per CUSTOMER 
+    grp = bureau.groupby(by = ['SK_ID_CURR'])['CREDIT_ACTIVE_BINARY'].mean().reset_index().rename(index=str, columns={'CREDIT_ACTIVE_BINARY': 'ACTIVE_LOANS_PERCENTAGE'})
+    bureau = bureau.merge(grp, on = ['SK_ID_CURR'], how = 'left')
+    del bureau['CREDIT_ACTIVE_BINARY']
+
+    grp = bureau[['SK_ID_CURR', 'SK_ID_BUREAU', 'DAYS_CREDIT']].groupby(by = ['SK_ID_CURR'])
+    grp1 = grp.apply(lambda x: x.sort_values(['DAYS_CREDIT'], ascending = False)).reset_index(drop = True)#rename(index = str, columns = {'DAYS_CREDIT': 'DAYS_CREDIT_DIFF'})
+    print("Grouping and Sorting done")
+    
+    # Calculate Difference between the number of Days 
+    grp1['DAYS_CREDIT1'] = grp1['DAYS_CREDIT']*-1
+    grp1['DAYS_DIFF'] = grp1.groupby(by = ['SK_ID_CURR'])['DAYS_CREDIT1'].diff()
+    grp1['DAYS_DIFF'] = grp1['DAYS_DIFF'].fillna(0).astype('uint32')
+    del grp1['DAYS_CREDIT1'], grp1['DAYS_CREDIT'], grp1['SK_ID_CURR']
+    gc.collect()
+    print("Difference days calculated")
+    
+    bureau = bureau.merge(grp1, on = ['SK_ID_BUREAU'], how = 'left')
+    
+    bureau['CREDIT_ENDDATE_BINARY'] = bureau['DAYS_CREDIT_ENDDATE']
+
+    def f1(x):
+        if x<0:
+            y = 0
+        else:
+            y = 1   
+        return y
+    
+    bureau['CREDIT_ENDDATE_BINARY'] = bureau.apply(lambda x: f1(x.DAYS_CREDIT_ENDDATE), axis = 1)
+    print("New Binary Column calculated")
+    
+    grp = bureau.groupby(by = ['SK_ID_CURR'])['CREDIT_ENDDATE_BINARY'].mean().reset_index().rename(index=str, columns={'CREDIT_ENDDATE_BINARY': 'CREDIT_ENDDATE_PERCENTAGE'})
+    bureau = bureau.merge(grp, on = ['SK_ID_CURR'], how = 'left')
+    
+    del bureau['CREDIT_ENDDATE_BINARY']
+    
+    bureau['CREDIT_ENDDATE_BINARY'] = bureau['DAYS_CREDIT_ENDDATE']
+
+    def f2(x):
+        if x<0:
+            y = 0
+        else:
+            y = 1   
+        return y
+
+    bureau['CREDIT_ENDDATE_BINARY'] = bureau.apply(lambda x: f2(x.DAYS_CREDIT_ENDDATE), axis = 1)
+    print("New Binary Column calculated 2")
+    
+    # We take only positive values of  ENDDATE since we are looking at Bureau Credit VALID IN FUTURE 
+    # as of the date of the customer's loan application with Home Credit 
+    bureau1 = bureau[bureau['CREDIT_ENDDATE_BINARY'] == 1]
+    bureau1.shape
+    
+    #Calculate Difference in successive future end dates of CREDIT 
+    
+    # Create Dummy Column for CREDIT_ENDDATE 
+    bureau1['DAYS_CREDIT_ENDDATE1'] = bureau1['DAYS_CREDIT_ENDDATE']
+    print("Dummy credit enddate created")
+    # Groupby Each Customer ID 
+    grp = bureau1[['SK_ID_CURR', 'SK_ID_BUREAU', 'DAYS_CREDIT_ENDDATE1']].groupby(by = ['SK_ID_CURR'])
+    # Sort the values of CREDIT_ENDDATE for each customer ID 
+    grp1 = grp.apply(lambda x: x.sort_values(['DAYS_CREDIT_ENDDATE1'], ascending = True)).reset_index(drop = True)
+    del grp
+    gc.collect()
+    print("Grouping and Sorting done")
+    
+    # Calculate the Difference in ENDDATES and fill missing values with zero 
+    grp1['DAYS_ENDDATE_DIFF'] = grp1.groupby(by = ['SK_ID_CURR'])['DAYS_CREDIT_ENDDATE1'].diff()
+    grp1['DAYS_ENDDATE_DIFF'] = grp1['DAYS_ENDDATE_DIFF'].fillna(0).astype('uint32')
+    del grp1['DAYS_CREDIT_ENDDATE1'], grp1['SK_ID_CURR']
+
+    bureau = bureau.merge(grp1, on = ['SK_ID_BUREAU'], how = 'left')
+    del grp1
+    gc.collect()
+    
+    # Calculate Average of DAYS_ENDDATE_DIFF
+    
+    grp = bureau[['SK_ID_CURR', 'DAYS_ENDDATE_DIFF']].groupby(by = ['SK_ID_CURR'])['DAYS_ENDDATE_DIFF'].mean().reset_index().rename( index = str, columns = {'DAYS_ENDDATE_DIFF': 'AVG_ENDDATE_FUTURE'})
+    bureau = bureau.merge(grp, on = ['SK_ID_CURR'], how = 'left')
+    del grp 
+    print(bureau.columns)
+    #del B['DAYS_ENDDATE_DIFF']
+    del bureau['CREDIT_ENDDATE_BINARY']
+    
+    #del bureau['DAYS_CREDIT_ENDDATE']
+    gc.collect()
+    print(bureau.shape)
+    
+    bureau['AMT_CREDIT_SUM_DEBT'] = bureau['AMT_CREDIT_SUM_DEBT'].fillna(0)
+    bureau['AMT_CREDIT_SUM_OVERDUE'] = bureau['AMT_CREDIT_SUM_OVERDUE'].fillna(0)
+    bureau['AMT_CREDIT_SUM'] = bureau['AMT_CREDIT_SUM'].fillna(0)
+    
+    grp1 = bureau[['SK_ID_CURR', 'AMT_CREDIT_SUM_DEBT']].groupby(by = ['SK_ID_CURR'])['AMT_CREDIT_SUM_DEBT'].sum().reset_index().rename( index = str, columns = { 'AMT_CREDIT_SUM_DEBT': 'TOTAL_CUSTOMER_DEBT'})
+    grp2 = bureau[['SK_ID_CURR', 'AMT_CREDIT_SUM']].groupby(by = ['SK_ID_CURR'])['AMT_CREDIT_SUM'].sum().reset_index().rename( index = str, columns = { 'AMT_CREDIT_SUM': 'TOTAL_CUSTOMER_CREDIT'})
+    grp3 = bureau[['SK_ID_CURR', 'AMT_CREDIT_SUM_OVERDUE']].groupby(by = ['SK_ID_CURR'])['AMT_CREDIT_SUM_OVERDUE'].sum().reset_index().rename( index = str, columns = { 'AMT_CREDIT_SUM_OVERDUE': 'TOTAL_CUSTOMER_OVERDUE'})
+    
+    bureau = bureau.merge(grp1, on = ['SK_ID_CURR'], how = 'left')
+    bureau = bureau.merge(grp2, on = ['SK_ID_CURR'], how = 'left')
+    bureau = bureau.merge(grp3, on = ['SK_ID_CURR'], how = 'left')
+    del grp1, grp2, grp3
+    gc.collect()
+
+    bureau['DEBT_CREDIT_RATIO'] = bureau['TOTAL_CUSTOMER_DEBT']/bureau['TOTAL_CUSTOMER_CREDIT']
+    bureau['OVERDUE_DEBT_RATIO'] = bureau['TOTAL_CUSTOMER_OVERDUE']/bureau['TOTAL_CUSTOMER_DEBT']
+
+
+    del bureau['TOTAL_CUSTOMER_DEBT'], bureau['TOTAL_CUSTOMER_CREDIT']
+
+
+    bb, bb_cat = one_hot_encoder(bb, nan_as_category, drop_first = drop_first)
+    bureau, bureau_cat = one_hot_encoder(bureau, nan_as_category, drop_first = drop_first)
     
     # Bureau balance: Perform aggregations and merge with bureau.csv
     bb_aggregations = {'MONTHS_BALANCE': ['min', 'max', 'size']}
@@ -95,7 +241,7 @@ def bureau_and_balance(num_rows = None, nan_as_category = True, drop_first = Fal
         'DAYS_CREDIT': ['mean', 'var'],
         'DAYS_CREDIT_ENDDATE': ['mean'],
         'DAYS_CREDIT_UPDATE': ['mean'],
-        'CREDIT_DAY_OVERDUE': ['mean'],
+        'CREDIT_DAY_OVERDUE': ['mean', 'max'],
         'AMT_CREDIT_MAX_OVERDUE': ['mean'],
         'AMT_CREDIT_SUM': ['mean', 'sum'],
         'AMT_CREDIT_SUM_DEBT': ['mean', 'sum'],
@@ -114,15 +260,7 @@ def bureau_and_balance(num_rows = None, nan_as_category = True, drop_first = Fal
     
     bureau_agg = bureau.groupby('SK_ID_CURR').agg({**num_aggregations, **cat_aggregations})
     bureau_agg.columns = pd.Index(['BURO_' + e[0] + "_" + e[1].upper() for e in bureau_agg.columns.tolist()])
-    
-    # Bureau: Active credits - using only numerical aggregations
-    active = bureau[bureau['CREDIT_ACTIVE_Active'] == 1]
-    active_agg = active.groupby('SK_ID_CURR').agg(num_aggregations)
-    active_agg.columns = pd.Index(['ACTIVE_' + e[0] + "_" + e[1].upper() for e in active_agg.columns.tolist()])
-    bureau_agg = bureau_agg.join(active_agg, how='left', on='SK_ID_CURR')
-    del active, active_agg
-    gc.collect()
-    
+      
     # Bureau: Closed credits - using only numerical aggregations
     closed = bureau[bureau['CREDIT_ACTIVE_Closed'] == 1]
     closed_agg = closed.groupby('SK_ID_CURR').agg(num_aggregations)
@@ -186,7 +324,7 @@ def previous_applications(num_rows = None, nan_as_category = True, drop_first = 
 
 
 # Preprocess POS_CASH_balance.csv
-def pos_cash(num_rows = None, nan_as_category = True, drop_first = False):
+def pos_cash(num_rows = None, nan_as_category = True, drop_first = True):
     pos = pd.read_csv('POS_CASH_balance.csv', nrows = num_rows)
     pos, cat_cols = one_hot_encoder(pos, nan_as_category= True, drop_first = drop_first)
     
@@ -210,7 +348,7 @@ def pos_cash(num_rows = None, nan_as_category = True, drop_first = False):
 
     
 # Preprocess installments_payments.csv
-def installments_payments(num_rows = None, nan_as_category = True, drop_first = False):
+def installments_payments(num_rows = None, nan_as_category = True, drop_first = True):
     ins = pd.read_csv('installments_payments.csv', nrows = num_rows)
     ins, cat_cols = one_hot_encoder(ins, nan_as_category= True, drop_first = drop_first)
 
@@ -247,7 +385,7 @@ def installments_payments(num_rows = None, nan_as_category = True, drop_first = 
     return ins_agg
 
 # Preprocess credit_card_balance.csv
-def credit_card_balance(num_rows = None, nan_as_category = True, drop_first = False):
+def credit_card_balance(num_rows = None, nan_as_category = True, drop_first = True):
     cc = pd.read_csv('credit_card_balance.csv', nrows = num_rows)
     cc, cat_cols = one_hot_encoder(cc, nan_as_category= True, drop_first = drop_first)
 
@@ -268,6 +406,7 @@ def kfold_lightgbm(df, num_folds, stratified = False, debug= False):
     # Divide in training/validation and test data
     train_df = df[df['TARGET'].notnull()]
     test_df = df[df['TARGET'].isnull()]
+    
     print("Starting LightGBM. Train shape: {}, test shape: {}".format(train_df.shape, test_df.shape))
     del df
     gc.collect()
@@ -283,14 +422,14 @@ def kfold_lightgbm(df, num_folds, stratified = False, debug= False):
     sub_preds = np.zeros(test_df.shape[0])
     feature_importance_df = pd.DataFrame()
     feats = [f for f in train_df.columns if f not in ['TARGET','SK_ID_CURR','SK_ID_BUREAU','SK_ID_PREV','index']]
-    
+        
     for n_fold, (train_idx, valid_idx) in enumerate(folds.split(train_df[feats], train_df['TARGET'])):
         train_x, train_y = train_df[feats].iloc[train_idx], train_df['TARGET'].iloc[train_idx]
         valid_x, valid_y = train_df[feats].iloc[valid_idx], train_df['TARGET'].iloc[valid_idx]
 
-        # LightGBM parameters found by Bayesian optimization
         clf = LGBMClassifier(
             nthread=4,
+            scale_pos_weight = 1.3,
             n_estimators=10000,
             learning_rate=0.02,
             num_leaves=34,
@@ -303,6 +442,7 @@ def kfold_lightgbm(df, num_folds, stratified = False, debug= False):
             min_child_weight=39.3259775,
             silent=-1,
             verbose=-1, )
+       
 
         clf.fit(train_x, train_y, eval_set=[(train_x, train_y), (valid_x, valid_y)], 
             eval_metric= 'auc', verbose= 1000, early_stopping_rounds= 200)
@@ -327,6 +467,7 @@ def kfold_lightgbm(df, num_folds, stratified = False, debug= False):
     display_importances(feature_importance_df)
     return feature_importance_df
 
+
 # Display/plot feature importance
 def display_importances(feature_importance_df_):
     cols = feature_importance_df_[["feature", "importance"]].groupby("feature").mean().sort_values(by="importance", ascending=False)[:40].index
@@ -337,7 +478,7 @@ def display_importances(feature_importance_df_):
     plt.tight_layout()
     plt.savefig('lgbm_importances01.png')
 
-
+    
 def main(debug = False):
     num_rows = 10000 if debug else None
     
