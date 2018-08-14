@@ -10,7 +10,6 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import warnings
 warnings.simplefilter(action='ignore', category=FutureWarning)
-seed = 1807
 
 @contextmanager
 def timer(title):
@@ -35,6 +34,8 @@ def application_train_test(num_rows = None, nan_as_category = False, drop_first 
     test_df = pd.read_csv('application_test.csv', nrows= num_rows)
     print("Train samples: {}, test samples: {}".format(len(df), len(test_df)))
     df = df.append(test_df).reset_index()
+    
+   
     
     # Optional: Remove 4 applications with XNA CODE_GENDER (train set)
     df = df[df['CODE_GENDER'] != 'XNA']
@@ -65,7 +66,6 @@ def application_train_test(num_rows = None, nan_as_category = False, drop_first 
     df['NEW_PHONE_TO_EMPLOYED_RATIO'] = df['DAYS_LAST_PHONE_CHANGE'] / df['DAYS_EMPLOYED']
     df['NEW_CREDIT_TO_INCOME_RATIO'] = df['AMT_CREDIT'] / df['AMT_INCOME_TOTAL']
     
-    
     # Categorical features with Binary encode (0 or 1; two categories)
     for bin_feature in ['CODE_GENDER', 'FLAG_OWN_CAR', 'FLAG_OWN_REALTY']:
         df[bin_feature], uniques = pd.factorize(df[bin_feature])
@@ -80,146 +80,14 @@ def application_train_test(num_rows = None, nan_as_category = False, drop_first 
     'FLAG_DOCUMENT_14','FLAG_DOCUMENT_15','FLAG_DOCUMENT_16',
     'FLAG_DOCUMENT_17','FLAG_DOCUMENT_18','FLAG_DOCUMENT_19',
     'FLAG_DOCUMENT_20','FLAG_DOCUMENT_21']
-    df= df.drop(dropcolum,axis=1)
-    
+    df= df.drop(dropcolum,axis=1)  
     del test_df
     return df
 
 # Preprocess bureau.csv and bureau_balance.csv
 def bureau_and_balance(num_rows = None, nan_as_category = True, drop_first = False):
     bureau = pd.read_csv('bureau.csv', nrows = num_rows)
-    bb = pd.read_csv('bureau_balance.csv', nrows = num_rows)
-    
-    grp = bureau[['SK_ID_CURR', 'DAYS_CREDIT']].groupby(by = ['SK_ID_CURR'])['DAYS_CREDIT'].count().reset_index().rename(index=str, columns={'DAYS_CREDIT': 'BUREAU_LOAN_COUNT'})
-    bureau = bureau.merge(grp, on = ['SK_ID_CURR'], how = 'left')
-
-    grp = bureau[['SK_ID_CURR', 'CREDIT_TYPE']].groupby(by = ['SK_ID_CURR'])['CREDIT_TYPE'].nunique().reset_index().rename(index=str, columns={'CREDIT_TYPE': 'BUREAU_LOAN_TYPES'})
-    bureau = bureau.merge(grp, on = ['SK_ID_CURR'], how = 'left')
-    
-    # Average Number of Loans per Loan Type
-    bureau['AVERAGE_LOAN_TYPE'] = bureau['BUREAU_LOAN_COUNT']/bureau['BUREAU_LOAN_TYPES']
-    del bureau['BUREAU_LOAN_COUNT'], bureau['BUREAU_LOAN_TYPES']
-    
-    
-    # Create a new dummy column for whether CREDIT is ACTIVE OR CLOED 
-    bureau['CREDIT_ACTIVE_BINARY'] =bureau['CREDIT_ACTIVE']
-
-    def f(x):
-        if x == 'Closed':
-            y = 0
-        else:
-            y = 1    
-        return y
-    
-    bureau['CREDIT_ACTIVE_BINARY'] = bureau.apply(lambda x: f(x.CREDIT_ACTIVE), axis = 1)
-    
-    # Calculate mean number of loans that are ACTIVE per CUSTOMER 
-    grp = bureau.groupby(by = ['SK_ID_CURR'])['CREDIT_ACTIVE_BINARY'].mean().reset_index().rename(index=str, columns={'CREDIT_ACTIVE_BINARY': 'ACTIVE_LOANS_PERCENTAGE'})
-    bureau = bureau.merge(grp, on = ['SK_ID_CURR'], how = 'left')
-    del bureau['CREDIT_ACTIVE_BINARY']
-
-    grp = bureau[['SK_ID_CURR', 'SK_ID_BUREAU', 'DAYS_CREDIT']].groupby(by = ['SK_ID_CURR'])
-    grp1 = grp.apply(lambda x: x.sort_values(['DAYS_CREDIT'], ascending = False)).reset_index(drop = True)#rename(index = str, columns = {'DAYS_CREDIT': 'DAYS_CREDIT_DIFF'})
-    print("Grouping and Sorting done")
-    
-    # Calculate Difference between the number of Days 
-    grp1['DAYS_CREDIT1'] = grp1['DAYS_CREDIT']*-1
-    grp1['DAYS_DIFF'] = grp1.groupby(by = ['SK_ID_CURR'])['DAYS_CREDIT1'].diff()
-    grp1['DAYS_DIFF'] = grp1['DAYS_DIFF'].fillna(0).astype('uint32')
-    del grp1['DAYS_CREDIT1'], grp1['DAYS_CREDIT'], grp1['SK_ID_CURR']
-    gc.collect()
-    print("Difference days calculated")
-    
-    bureau = bureau.merge(grp1, on = ['SK_ID_BUREAU'], how = 'left')
-    
-    bureau['CREDIT_ENDDATE_BINARY'] = bureau['DAYS_CREDIT_ENDDATE']
-
-    def f1(x):
-        if x<0:
-            y = 0
-        else:
-            y = 1   
-        return y
-    
-    bureau['CREDIT_ENDDATE_BINARY'] = bureau.apply(lambda x: f1(x.DAYS_CREDIT_ENDDATE), axis = 1)
-    print("New Binary Column calculated")
-    
-    grp = bureau.groupby(by = ['SK_ID_CURR'])['CREDIT_ENDDATE_BINARY'].mean().reset_index().rename(index=str, columns={'CREDIT_ENDDATE_BINARY': 'CREDIT_ENDDATE_PERCENTAGE'})
-    bureau = bureau.merge(grp, on = ['SK_ID_CURR'], how = 'left')
-    
-    del bureau['CREDIT_ENDDATE_BINARY']
-    
-    bureau['CREDIT_ENDDATE_BINARY'] = bureau['DAYS_CREDIT_ENDDATE']
-
-    def f2(x):
-        if x<0:
-            y = 0
-        else:
-            y = 1   
-        return y
-
-    bureau['CREDIT_ENDDATE_BINARY'] = bureau.apply(lambda x: f2(x.DAYS_CREDIT_ENDDATE), axis = 1)
-    print("New Binary Column calculated 2")
-    
-    # We take only positive values of  ENDDATE since we are looking at Bureau Credit VALID IN FUTURE 
-    # as of the date of the customer's loan application with Home Credit 
-    bureau1 = bureau[bureau['CREDIT_ENDDATE_BINARY'] == 1]
-    bureau1.shape
-    
-    #Calculate Difference in successive future end dates of CREDIT 
-    
-    # Create Dummy Column for CREDIT_ENDDATE 
-    bureau1['DAYS_CREDIT_ENDDATE1'] = bureau1['DAYS_CREDIT_ENDDATE']
-    print("Dummy credit enddate created")
-    # Groupby Each Customer ID 
-    grp = bureau1[['SK_ID_CURR', 'SK_ID_BUREAU', 'DAYS_CREDIT_ENDDATE1']].groupby(by = ['SK_ID_CURR'])
-    # Sort the values of CREDIT_ENDDATE for each customer ID 
-    grp1 = grp.apply(lambda x: x.sort_values(['DAYS_CREDIT_ENDDATE1'], ascending = True)).reset_index(drop = True)
-    del grp
-    gc.collect()
-    print("Grouping and Sorting done")
-    
-    # Calculate the Difference in ENDDATES and fill missing values with zero 
-    grp1['DAYS_ENDDATE_DIFF'] = grp1.groupby(by = ['SK_ID_CURR'])['DAYS_CREDIT_ENDDATE1'].diff()
-    grp1['DAYS_ENDDATE_DIFF'] = grp1['DAYS_ENDDATE_DIFF'].fillna(0).astype('uint32')
-    del grp1['DAYS_CREDIT_ENDDATE1'], grp1['SK_ID_CURR']
-
-    bureau = bureau.merge(grp1, on = ['SK_ID_BUREAU'], how = 'left')
-    del grp1
-    gc.collect()
-    
-    # Calculate Average of DAYS_ENDDATE_DIFF
-    
-    grp = bureau[['SK_ID_CURR', 'DAYS_ENDDATE_DIFF']].groupby(by = ['SK_ID_CURR'])['DAYS_ENDDATE_DIFF'].mean().reset_index().rename( index = str, columns = {'DAYS_ENDDATE_DIFF': 'AVG_ENDDATE_FUTURE'})
-    bureau = bureau.merge(grp, on = ['SK_ID_CURR'], how = 'left')
-    del grp 
-    print(bureau.columns)
-    #del B['DAYS_ENDDATE_DIFF']
-    del bureau['CREDIT_ENDDATE_BINARY']
-    
-    #del bureau['DAYS_CREDIT_ENDDATE']
-    gc.collect()
-    print(bureau.shape)
-    
-    bureau['AMT_CREDIT_SUM_DEBT'] = bureau['AMT_CREDIT_SUM_DEBT'].fillna(0)
-    bureau['AMT_CREDIT_SUM_OVERDUE'] = bureau['AMT_CREDIT_SUM_OVERDUE'].fillna(0)
-    bureau['AMT_CREDIT_SUM'] = bureau['AMT_CREDIT_SUM'].fillna(0)
-    
-    grp1 = bureau[['SK_ID_CURR', 'AMT_CREDIT_SUM_DEBT']].groupby(by = ['SK_ID_CURR'])['AMT_CREDIT_SUM_DEBT'].sum().reset_index().rename( index = str, columns = { 'AMT_CREDIT_SUM_DEBT': 'TOTAL_CUSTOMER_DEBT'})
-    grp2 = bureau[['SK_ID_CURR', 'AMT_CREDIT_SUM']].groupby(by = ['SK_ID_CURR'])['AMT_CREDIT_SUM'].sum().reset_index().rename( index = str, columns = { 'AMT_CREDIT_SUM': 'TOTAL_CUSTOMER_CREDIT'})
-    grp3 = bureau[['SK_ID_CURR', 'AMT_CREDIT_SUM_OVERDUE']].groupby(by = ['SK_ID_CURR'])['AMT_CREDIT_SUM_OVERDUE'].sum().reset_index().rename( index = str, columns = { 'AMT_CREDIT_SUM_OVERDUE': 'TOTAL_CUSTOMER_OVERDUE'})
-    
-    bureau = bureau.merge(grp1, on = ['SK_ID_CURR'], how = 'left')
-    bureau = bureau.merge(grp2, on = ['SK_ID_CURR'], how = 'left')
-    bureau = bureau.merge(grp3, on = ['SK_ID_CURR'], how = 'left')
-    del grp1, grp2, grp3
-    gc.collect()
-
-    bureau['DEBT_CREDIT_RATIO'] = bureau['TOTAL_CUSTOMER_DEBT']/bureau['TOTAL_CUSTOMER_CREDIT']
-    bureau['OVERDUE_DEBT_RATIO'] = bureau['TOTAL_CUSTOMER_OVERDUE']/bureau['TOTAL_CUSTOMER_DEBT']
-
-
-    del bureau['TOTAL_CUSTOMER_DEBT'], bureau['TOTAL_CUSTOMER_CREDIT']
+    bb = pd.read_csv('bureau_balance.csv', nrows = num_rows) 
 
 
     bb, bb_cat = one_hot_encoder(bb, nan_as_category, drop_first = drop_first)
@@ -365,6 +233,7 @@ def installments_payments(num_rows = None, nan_as_category = True, drop_first = 
     # Features: Perform aggregations
     aggregations = {
         'NUM_INSTALMENT_VERSION': ['nunique'],
+        'NUM_INSTALMENT_NUMBER': [ 'min','max', 'mean'],
         'DPD': ['max', 'mean', 'sum','min','std' ],
         'DBD': ['max', 'mean', 'sum','min','std'],
         'PAYMENT_PERC': [ 'max','mean',  'var','min','std'],
@@ -401,11 +270,415 @@ def credit_card_balance(num_rows = None, nan_as_category = True, drop_first = Tr
     return cc_agg
 
 # LightGBM GBDT with KFold or Stratified KFold
-# Parameters from Tilii kernel: https://www.kaggle.com/tilii7/olivier-lightgbm-parameters-by-bayesian-opt/code
 def kfold_lightgbm(df, num_folds, stratified = False, debug= False):
-    # Divide in training/validation and test data
+    
+    dropcolum=['CC_NAME_CONTRACT_STATUS_Refused_MAX',
+    'CC_NAME_CONTRACT_STATUS_Refused_VAR',
+    'FLAG_EMP_PHONE',
+    'FLAG_MOBIL',
+    'CC_NAME_CONTRACT_STATUS_Refused_SUM',
+    'CC_NAME_CONTRACT_STATUS_Refused_MIN',
+    'CC_NAME_CONTRACT_STATUS_Refused_MEAN',
+    'CC_CNT_DRAWINGS_ATM_CURRENT_MIN',
+    'CC_NAME_CONTRACT_STATUS_Sent proposal_MAX',
+    'AMT_REQ_CREDIT_BUREAU_HOUR',
+    'BURO_STATUS_nan_MEAN_MEAN',
+    'CC_SK_DPD_DEF_MIN',
+    'CC_NAME_CONTRACT_STATUS_Demand_VAR',
+    'NAME_FAMILY_STATUS_Unknown',
+    'CC_NAME_CONTRACT_STATUS_Demand_SUM',
+    'NAME_INCOME_TYPE_Maternity leave',
+    'PREV_NAME_YIELD_GROUP_nan_MEAN',
+    'NAME_INCOME_TYPE_Pensioner',
+    'NAME_INCOME_TYPE_Student',
+    'NAME_INCOME_TYPE_Unemployed',
+    'NAME_TYPE_SUITE_Group of people',
+    'NAME_TYPE_SUITE_Other_A',
+    'CC_NAME_CONTRACT_STATUS_Demand_MIN',
+    'CC_NAME_CONTRACT_STATUS_Demand_MEAN',
+    'CC_NAME_CONTRACT_STATUS_Demand_MAX',
+    'CC_CNT_DRAWINGS_OTHER_CURRENT_MIN',
+    'FLAG_CONT_MOBILE',
+    'CC_NAME_CONTRACT_STATUS_Sent proposal_SUM',
+    'HOUSETYPE_MODE_terraced house',
+    'WALLSMATERIAL_MODE_Monolithic',
+    'CLOSED_AMT_CREDIT_SUM_OVERDUE_MEAN',
+    'CC_NAME_CONTRACT_STATUS_nan_MAX',
+    'CC_NAME_CONTRACT_STATUS_nan_MEAN',
+    'BURO_CREDIT_CURRENCY_nan_MEAN',
+    'BURO_CREDIT_CURRENCY_currency 4_MEAN',
+    'BURO_CREDIT_CURRENCY_currency 3_MEAN',
+    'BURO_CREDIT_CURRENCY_currency 2_MEAN',
+    'BURO_CREDIT_CURRENCY_currency 1_MEAN',
+    'BURO_CREDIT_ACTIVE_nan_MEAN',
+    'CC_NAME_CONTRACT_STATUS_nan_MIN',
+    'CC_NAME_CONTRACT_STATUS_nan_SUM',
+    'INSTAL_DPD_MIN',
+    'CC_SK_DPD_MIN',
+    'CC_NAME_CONTRACT_STATUS_nan_VAR',
+    'BURO_CREDIT_ACTIVE_Bad debt_MEAN',
+    'CC_NAME_CONTRACT_STATUS_Signed_MIN',
+    'CC_CNT_DRAWINGS_OTHER_CURRENT_SUM',
+    'CC_NAME_CONTRACT_STATUS_Sent proposal_MEAN',
+    'BURO_CREDIT_TYPE_Cash loan (non-earmarked)_MEAN',
+    'CC_NAME_CONTRACT_STATUS_Sent proposal_MIN',
+    'CC_SK_DPD_DEF_MAX',
+    'WALLSMATERIAL_MODE_Wooden',
+    'PREV_PRODUCT_COMBINATION_nan_MEAN',
+    'CC_NAME_CONTRACT_STATUS_Sent proposal_VAR',
+    'BURO_CREDIT_TYPE_nan_MEAN',
+    'BURO_CREDIT_TYPE_Unknown type of loan_MEAN',
+    'BURO_CREDIT_TYPE_Real estate loan_MEAN',
+    'BURO_CREDIT_TYPE_Mobile operator loan_MEAN',
+    'BURO_CREDIT_TYPE_Loan for the purchase of equipment_MEAN',
+    'BURO_CREDIT_TYPE_Loan for purchase of shares (margin lending)_MEAN',
+    'CLOSED_CREDIT_DAY_OVERDUE_MEAN',
+    'CLOSED_CREDIT_DAY_OVERDUE_MAX',
+    'PREV_WEEKDAY_APPR_PROCESS_START_nan_MEAN',
+    'BURO_CREDIT_TYPE_Interbank credit_MEAN',
+    'CC_NAME_CONTRACT_STATUS_Signed_MAX',
+    'POS_NAME_CONTRACT_STATUS_XNA_MEAN',
+    'CC_NAME_CONTRACT_STATUS_Completed_MIN',
+    'ORGANIZATION_TYPE_Postal',
+    'PREV_NAME_CASH_LOAN_PURPOSE_Money for a third person_MEAN',
+    'ORGANIZATION_TYPE_Services',
+    'PREV_NAME_CASH_LOAN_PURPOSE_Purchase of electronic equipment_MEAN',
+    'PREV_NAME_CASH_LOAN_PURPOSE_Refusal to name the goal_MEAN',
+    'PREV_NAME_CASH_LOAN_PURPOSE_Wedding / gift / holiday_MEAN',
+    'ORGANIZATION_TYPE_Religion',
+    'ORGANIZATION_TYPE_Realtor',
+    'PREV_NAME_CASH_LOAN_PURPOSE_nan_MEAN',
+    'ORGANIZATION_TYPE_Mobile',
+    'PREV_NAME_CASH_LOAN_PURPOSE_Journey_MEAN',
+    'ORGANIZATION_TYPE_Legal Services',
+    'PREV_NAME_CLIENT_TYPE_XNA_MEAN',
+    'PREV_NAME_CLIENT_TYPE_nan_MEAN',
+    'ORGANIZATION_TYPE_Insurance',
+    'ORGANIZATION_TYPE_Industry: type 8',
+    'ORGANIZATION_TYPE_Industry: type 7',
+    'PREV_NAME_CONTRACT_STATUS_nan_MEAN',
+    'ORGANIZATION_TYPE_Industry: type 6',
+    'ORGANIZATION_TYPE_Telecom',
+    'PREV_NAME_CASH_LOAN_PURPOSE_Hobby_MEAN',
+    'PREV_NAME_SELLER_INDUSTRY_nan_MEAN',
+    'PREV_FLAG_LAST_APPL_PER_CONTRACT_nan_MEAN',
+    'POS_NAME_CONTRACT_STATUS_Canceled_MEAN',
+    'POS_NAME_CONTRACT_STATUS_Amortized debt_MEAN',
+    'ORGANIZATION_TYPE_XNA',
+    'PREV_CODE_REJECT_REASON_SYSTEM_MEAN',
+    'ORGANIZATION_TYPE_Transport: type 2',
+    'ORGANIZATION_TYPE_Transport: type 1',
+    'PREV_CODE_REJECT_REASON_nan_MEAN',
+    'ORGANIZATION_TYPE_Trade: type 6',
+    'ORGANIZATION_TYPE_Trade: type 5',
+    'PREV_NAME_CASH_LOAN_PURPOSE_Gasification / water supply_MEAN',
+    'ORGANIZATION_TYPE_Trade: type 4',
+    'PREV_NAME_CASH_LOAN_PURPOSE_Building a house or an annex_MEAN',
+    'PREV_NAME_CASH_LOAN_PURPOSE_Business development_MEAN',
+    'PREV_NAME_CASH_LOAN_PURPOSE_Buying a garage_MEAN',
+    'PREV_NAME_CASH_LOAN_PURPOSE_Buying a holiday home / land_MEAN',
+    'PREV_CHANNEL_TYPE_nan_MEAN',
+    'PREV_NAME_CASH_LOAN_PURPOSE_Buying a new car_MEAN',
+    'ORGANIZATION_TYPE_Trade: type 1',
+    'POS_NAME_CONTRACT_STATUS_nan_MEAN',
+    'ORGANIZATION_TYPE_Industry: type 4',
+    'PREV_NAME_CONTRACT_TYPE_XNA_MEAN',
+    'PREV_NAME_PRODUCT_TYPE_nan_MEAN',
+    'PREV_NAME_PAYMENT_TYPE_Cashless from the account of the employer_MEAN',
+    'OCCUPATION_TYPE_Secretaries',
+    'PREV_NAME_PAYMENT_TYPE_nan_MEAN',
+    'OCCUPATION_TYPE_Realty agents',
+    'PREV_NAME_PORTFOLIO_Cars_MEAN',
+    'CC_AMT_DRAWINGS_OTHER_CURRENT_MIN',
+    'PREV_CHANNEL_TYPE_Car dealer_MEAN',
+    'PREV_NAME_PORTFOLIO_nan_MEAN',
+    'POS_NAME_CONTRACT_STATUS_Demand_MEAN',
+    'PREV_NAME_CONTRACT_TYPE_nan_MEAN',
+    'OCCUPATION_TYPE_HR staff',
+    'CC_NAME_CONTRACT_STATUS_Approved_MAX',
+    'CC_NAME_CONTRACT_STATUS_Approved_MEAN',
+    'CC_NAME_CONTRACT_STATUS_Approved_MIN',
+    'CC_NAME_CONTRACT_STATUS_Approved_SUM',
+    'CC_NAME_CONTRACT_STATUS_Approved_VAR',
+    'PREV_NAME_SELLER_INDUSTRY_MLM partners_MEAN',
+    'PREV_NAME_SELLER_INDUSTRY_Tourism_MEAN',
+    'ORGANIZATION_TYPE_Agriculture',
+    'PREV_NAME_GOODS_CATEGORY_nan_MEAN',
+    'PREV_NAME_GOODS_CATEGORY_Weapon_MEAN',
+    'ORGANIZATION_TYPE_Cleaning',
+    'PREV_NAME_GOODS_CATEGORY_Additional Service_MEAN',
+    'PREV_NAME_GOODS_CATEGORY_Animals_MEAN',
+    'ORGANIZATION_TYPE_Industry: type 2',
+    'ORGANIZATION_TYPE_Industry: type 13',
+    'ORGANIZATION_TYPE_Industry: type 12',
+    'ORGANIZATION_TYPE_Industry: type 11',
+    'ORGANIZATION_TYPE_Industry: type 10',
+    'PREV_NAME_GOODS_CATEGORY_Direct Sales_MEAN',
+    'PREV_NAME_GOODS_CATEGORY_Education_MEAN',
+    'PREV_NAME_GOODS_CATEGORY_Fitness_MEAN',
+    'ORGANIZATION_TYPE_Industry: type 1',
+    'ORGANIZATION_TYPE_Housing',
+    'PREV_NAME_GOODS_CATEGORY_House Construction_MEAN',
+    'PREV_NAME_GOODS_CATEGORY_Insurance_MEAN',
+    'ORGANIZATION_TYPE_Emergency',
+    'PREV_NAME_GOODS_CATEGORY_Medicine_MEAN',
+    'ORGANIZATION_TYPE_Culture',
+    'OCCUPATION_TYPE_IT staff',
+    'ORGANIZATION_TYPE_Trade: type 2',
+    'PREV_NAME_CASH_LOAN_PURPOSE_Furniture_MEAN',
+    'PREV_NAME_CASH_LOAN_PURPOSE_Everyday expenses_MEAN',
+    'ORGANIZATION_TYPE_Security',
+    'PREV_NAME_GOODS_CATEGORY_Other_MEAN',
+    'PREV_CODE_REJECT_REASON_CLIENT_MEAN',
+    'PREV_NAME_CASH_LOAN_PURPOSE_Payments on other loans_MEAN',
+    'CC_NAME_CONTRACT_STATUS_Completed_MAX',
+    'INSTAL_NUM_INSTALMENT_NUMBER_MIN',
+    'PREV_NAME_SELLER_INDUSTRY_Jewelry_MEAN',
+    'ORGANIZATION_TYPE_University',
+    'ORGANIZATION_TYPE_Restaurant',
+    'ORGANIZATION_TYPE_Business Entity Type 2',
+    'PREV_NAME_GOODS_CATEGORY_Office Appliances_MEAN',
+    'PREV_CODE_REJECT_REASON_XNA_MEAN',
+    'PREV_NAME_GOODS_CATEGORY_Homewares_MEAN',
+    'PREV_FLAG_LAST_APPL_PER_CONTRACT_Y_MEAN',
+    'BURO_CREDIT_TYPE_Loan for working capital replenishment_MEAN',
+    'PREV_NAME_CASH_LOAN_PURPOSE_Education_MEAN',
+    'CC_NAME_CONTRACT_STATUS_Signed_SUM',
+    'OCCUPATION_TYPE_Cooking staff',
+    'CC_AMT_DRAWINGS_ATM_CURRENT_MIN',
+    'PREV_NAME_GOODS_CATEGORY_Medical Supplies_MEAN',
+    'CC_CNT_DRAWINGS_OTHER_CURRENT_MAX',
+    'BURO_CNT_CREDIT_PROLONG_SUM',
+    'REG_REGION_NOT_LIVE_REGION',
+    'PREV_NAME_PAYMENT_TYPE_Non-cash from your account_MEAN',
+    'BURO_STATUS_5_MEAN_MEAN',
+    'CC_MONTHS_BALANCE_MAX',
+    'FONDKAPREMONT_MODE_reg oper account',
+    'ORGANIZATION_TYPE_Industry: type 3',
+    'PREV_NAME_CASH_LOAN_PURPOSE_Buying a used car_MEAN',
+    'ORGANIZATION_TYPE_Trade: type 3',
+    'CC_AMT_TOTAL_RECEIVABLE_MIN',
+    'CC_AMT_TOTAL_RECEIVABLE_SUM',
+    'NAME_HOUSING_TYPE_Rented apartment',
+    'CC_NAME_CONTRACT_STATUS_Completed_VAR',
+    'CC_AMT_TOTAL_RECEIVABLE_VAR',
+    'WEEKDAY_APPR_PROCESS_START_THURSDAY',
+    'BURO_CREDIT_DAY_OVERDUE_MEAN',
+    'PREV_NAME_CASH_LOAN_PURPOSE_Buying a home_MEAN',
+    'NAME_HOUSING_TYPE_With parents',
+    'CC_NAME_CONTRACT_STATUS_Completed_SUM',
+    'ORGANIZATION_TYPE_Industry: type 5',
+    'CC_CNT_DRAWINGS_OTHER_CURRENT_MEAN',
+    'PREV_NAME_TYPE_SUITE_Group of people_MEAN',
+    'OCCUPATION_TYPE_Cleaning staff',
+    'CC_SK_DPD_DEF_VAR',
+    'HOUSETYPE_MODE_specific housing',
+    'PREV_NAME_GOODS_CATEGORY_Auto Accessories_MEAN',
+    'CLOSED_CNT_CREDIT_PROLONG_SUM',
+    'PREV_NAME_GOODS_CATEGORY_Vehicles_MEAN',
+    'FLAG_OWN_CAR',
+    'FLAG_EMAIL',
+    'PREV_PRODUCT_COMBINATION_POS others without interest_MEAN',
+    'ORGANIZATION_TYPE_Trade: type 7',
+    'OCCUPATION_TYPE_Managers',
+    'CC_SK_DPD_MAX',
+    'CC_CNT_DRAWINGS_CURRENT_MIN',
+    'ORGANIZATION_TYPE_Restaurant',
+    'CC_AMT_INST_MIN_REGULARITY_MIN',
+    'FONDKAPREMONT_MODE_org spec account',
+    'CC_SK_DPD_DEF_SUM',
+    'PREV_NAME_GOODS_CATEGORY_Tourism_MEAN',
+    'OCCUPATION_TYPE_Security staff',
+    'CC_AMT_DRAWINGS_OTHER_CURRENT_MEAN',
+    'BURO_STATUS_3_MEAN_MEAN',
+    'ORGANIZATION_TYPE_Security',
+    'ORGANIZATION_TYPE_Electricity',
+    'PREV_FLAG_LAST_APPL_PER_CONTRACT_N_MEAN',
+    'WALLSMATERIAL_MODE_Mixed',
+    'CC_NAME_CONTRACT_STATUS_Signed_MEAN',
+    'PREV_NAME_SELLER_INDUSTRY_Jewelry_MEAN',
+    'BURO_CREDIT_TYPE_Another type of loan_MEAN',
+    'NAME_HOUSING_TYPE_Municipal apartment',
+    'BURO_MONTHS_BALANCE_MAX_MAX',
+    'CC_AMT_RECIVABLE_SUM',
+    'FLOORSMIN_MEDI',
+    'ORGANIZATION_TYPE_Police',
+    'PREV_NAME_CASH_LOAN_PURPOSE_Urgent needs_MEAN',
+    'PREV_NAME_CONTRACT_STATUS_Unused offer_MEAN',
+    'CC_CNT_INSTALMENT_MATURE_CUM_MAX',
+    'ORGANIZATION_TYPE_Security Ministries',
+    'CC_AMT_DRAWINGS_POS_CURRENT_MIN',
+    'FLOORSMAX_MODE',
+    'REGION_RATING_CLIENT',
+    'FLOORSMAX_MEDI',
+    'POS_COUNT',
+    'PREV_PRODUCT_COMBINATION_POS other with interest_MEAN',
+    'NAME_TYPE_SUITE_Unaccompanied',
+    'NAME_FAMILY_STATUS_Single / not married',
+    'WEEKDAY_APPR_PROCESS_START_SUNDAY',
+    'PREV_NAME_GOODS_CATEGORY_Clothing and Accessories_MEAN',
+    'WEEKDAY_APPR_PROCESS_START_TUESDAY',
+    'ELEVATORS_MODE',
+    'CC_AMT_RECEIVABLE_PRINCIPAL_MIN',
+    'BURO_CREDIT_DAY_OVERDUE_MAX',
+    'PREV_NAME_GOODS_CATEGORY_Gardening_MEAN',
+    'NONLIVINGAPARTMENTS_MEDI',
+    'PREV_NAME_TYPE_SUITE_Other_B_MEAN',
+    'PREV_NAME_SELLER_INDUSTRY_Clothing_MEAN',
+    'CC_NAME_CONTRACT_STATUS_Signed_VAR',
+    'WALLSMATERIAL_MODE_Panel',
+    'ORGANIZATION_TYPE_Medicine',
+    'CC_SK_DPD_VAR',
+    'PREV_CODE_REJECT_REASON_VERIF_MEAN',
+    'ELEVATORS_MEDI',
+    'OCCUPATION_TYPE_Low-skill Laborers',
+    'AMT_REQ_CREDIT_BUREAU_DAY',
+    'BURO_STATUS_2_MEAN_MEAN',
+    'PREV_NAME_CASH_LOAN_PURPOSE_Car repairs_MEAN',
+    'OCCUPATION_TYPE_Sales staff',
+    'CC_AMT_DRAWINGS_OTHER_CURRENT_MAX',
+    'CC_AMT_INST_MIN_REGULARITY_MAX',
+    'NAME_EDUCATION_TYPE_Lower secondary',
+    'PREV_NAME_SELLER_INDUSTRY_Industry_MEAN',
+    'BURO_STATUS_4_MEAN_MEAN',
+    'NAME_EDUCATION_TYPE_Incomplete higher',
+    'FONDKAPREMONT_MODE_reg oper spec account',
+    'CC_NAME_CONTRACT_STATUS_Completed_MEAN',
+    'PREV_NAME_SELLER_INDUSTRY_Auto technology_MEAN',
+    'NAME_FAMILY_STATUS_Separated',
+    'PREV_PRODUCT_COMBINATION_POS mobile without interest_MEAN',
+    'CC_AMT_DRAWINGS_OTHER_CURRENT_SUM',
+    'NAME_CONTRACT_TYPE_Revolving loans',
+    'NAME_TYPE_SUITE_Other_B',
+    'CC_SK_DPD_MEAN',
+    'ORGANIZATION_TYPE_Other',
+    'REG_CITY_NOT_WORK_CITY',
+    'CC_AMT_DRAWINGS_OTHER_CURRENT_VAR',
+    'ORGANIZATION_TYPE_Government',
+    'INSTAL_PAYMENT_PERC_STD',
+    'PREV_NAME_CASH_LOAN_PURPOSE_XAP_MEAN',
+    'NAME_TYPE_SUITE_Spouse, partner',
+    'CC_CNT_DRAWINGS_OTHER_CURRENT_VAR',
+    'WALLSMATERIAL_MODE_Others',
+    'CC_AMT_PAYMENT_TOTAL_CURRENT_MIN',
+    'CLOSED_AMT_CREDIT_SUM_LIMIT_SUM',
+    'CC_COUNT',
+    'CC_AMT_TOTAL_RECEIVABLE_MAX',
+    'ORGANIZATION_TYPE_Transport: type 4',
+    'INSTAL_PAYMENT_DIFF_STD',
+    'ORGANIZATION_TYPE_Hotel',
+    'ORGANIZATION_TYPE_Business Entity Type 1',
+    'NAME_TYPE_SUITE_Family',
+    'LIVE_REGION_NOT_WORK_REGION',
+    'REG_REGION_NOT_WORK_REGION',
+    'PREV_NAME_TYPE_SUITE_Other_A_MEAN',
+    'CC_AMT_TOTAL_RECEIVABLE_MEAN',
+    'NAME_FAMILY_STATUS_Widow',
+    'POS_NAME_CONTRACT_STATUS_Approved_MEAN',
+    'OCCUPATION_TYPE_Waiters/barmen staff',
+    'CC_MONTHS_BALANCE_MIN',
+    'CC_CNT_INSTALMENT_MATURE_CUM_MIN',
+    'CC_AMT_INST_MIN_REGULARITY_SUM',
+    'PREV_PRODUCT_COMBINATION_Card Street_MEAN',
+    'CLOSED_AMT_CREDIT_SUM_LIMIT_MEAN',
+    'PREV_NAME_GOODS_CATEGORY_Sport and Leisure_MEAN',
+    'CC_CNT_DRAWINGS_POS_CURRENT_MAX',
+    'CC_CNT_DRAWINGS_POS_CURRENT_VAR',
+    'CC_AMT_CREDIT_LIMIT_ACTUAL_MIN',
+    'PREV_NAME_SELLER_INDUSTRY_Furniture_MEAN',
+    'CC_AMT_PAYMENT_TOTAL_CURRENT_MAX',
+    'WALLSMATERIAL_MODE_Stone, brick',
+    'PREV_PRODUCT_COMBINATION_Cash Street: middle_MEAN',
+    'INSTAL_PAYMENT_DIFF_MIN',
+    'OCCUPATION_TYPE_High skill tech staff',
+    'CC_MONTHS_BALANCE_MEAN',
+    'NAME_HOUSING_TYPE_Office apartment',
+    'ENTRANCES_MODE',
+    'REFUSED_AMT_DOWN_PAYMENT_MAX',
+    'CC_AMT_DRAWINGS_CURRENT_MAX',
+    'WEEKDAY_APPR_PROCESS_START_MONDAY',
+    'PREV_PRODUCT_COMBINATION_POS household without interest_MEAN',
+    'AMT_REQ_CREDIT_BUREAU_MON',
+    'CC_AMT_BALANCE_MAX',
+    'CLOSED_AMT_CREDIT_SUM_DEBT_MEAN',
+    'CC_CNT_INSTALMENT_MATURE_CUM_VAR',
+    'CC_AMT_RECEIVABLE_PRINCIPAL_VAR',
+    'FLOORSMIN_AVG',
+    'CC_AMT_RECIVABLE_VAR',
+    'OCCUPATION_TYPE_Laborers',
+    'YEARS_BUILD_MEDI',
+    'CC_AMT_RECEIVABLE_PRINCIPAL_MAX',
+    'PREV_NAME_CASH_LOAN_PURPOSE_Repairs_MEAN',
+    'CC_AMT_INST_MIN_REGULARITY_MEAN',
+    'CC_AMT_CREDIT_LIMIT_ACTUAL_MAX',
+    'CC_CNT_INSTALMENT_MATURE_CUM_MEAN',
+    'CLOSED_MONTHS_BALANCE_MAX_MAX',
+    'OCCUPATION_TYPE_Medicine staff',
+    'CC_MONTHS_BALANCE_SUM',
+    'CC_AMT_RECIVABLE_MAX',
+    'REFUSED_AMT_DOWN_PAYMENT_MEAN',
+    'CC_MONTHS_BALANCE_VAR',
+    'CC_AMT_DRAWINGS_POS_CURRENT_MEAN',
+    'PREV_CODE_REJECT_REASON_SCOFR_MEAN',
+    'ELEVATORS_AVG',
+    'CC_SK_DPD_SUM',
+    'FLOORSMIN_MODE',
+    'CC_CNT_DRAWINGS_POS_CURRENT_SUM',
+    'NAME_HOUSING_TYPE_House / apartment',
+    'INSTAL_PAYMENT_PERC_MAX',
+    'LIVE_CITY_NOT_WORK_CITY',
+    'PREV_NAME_GOODS_CATEGORY_Construction Materials_MEAN',
+    'AMT_REQ_CREDIT_BUREAU_WEEK',
+    'CC_AMT_RECEIVABLE_PRINCIPAL_SUM',
+    'NAME_INCOME_TYPE_Commercial associate',
+    'FLAG_OWN_REALTY',
+    'NONLIVINGAPARTMENTS_MODE',
+    'PREV_PRODUCT_COMBINATION_POS industry without interest_MEAN',
+    'ORGANIZATION_TYPE_Kindergarten',
+    'WEEKDAY_APPR_PROCESS_START_SATURDAY',
+    'FLAG_PHONE',
+    'CC_CNT_DRAWINGS_POS_CURRENT_MIN',
+    'CC_CNT_INSTALMENT_MATURE_CUM_SUM',
+    'PREV_NAME_TYPE_SUITE_Children_MEAN',
+    'CC_AMT_BALANCE_SUM',
+    'PREV_NAME_SELLER_INDUSTRY_Construction_MEAN',
+    'CNT_CHILDREN',
+    'WEEKDAY_APPR_PROCESS_START_WEDNESDAY',
+    'PREV_NAME_GOODS_CATEGORY_Jewelry_MEAN',
+    'PREV_NAME_CASH_LOAN_PURPOSE_Other_MEAN',
+    'CC_AMT_DRAWINGS_CURRENT_MIN',
+    'ORGANIZATION_TYPE_Bank',
+    'PREV_NAME_CASH_LOAN_PURPOSE_Medicine_MEAN',
+    'CC_CNT_DRAWINGS_ATM_CURRENT_MAX',    
+    'CC_AMT_RECIVABLE_MEAN',
+    'CC_AMT_RECIVABLE_MIN',
+    'REFUSED_RATE_DOWN_PAYMENT_MAX',
+    'ENTRANCES_MEDI',
+    'PREV_CODE_REJECT_REASON_LIMIT_MEAN',
+    'BURO_CREDIT_ACTIVE_Sold_MEAN',
+    'CC_AMT_DRAWINGS_POS_CURRENT_VAR',
+    'CC_AMT_PAYMENT_TOTAL_CURRENT_VAR',
+    'PREV_NAME_GOODS_CATEGORY_Photo / Cinema Equipment_MEAN',
+    'CC_AMT_DRAWINGS_CURRENT_SUM',
+    'NEW_LIVE_IND_SUM',
+    'CC_AMT_DRAWINGS_POS_CURRENT_MAX',
+    'CC_CNT_DRAWINGS_ATM_CURRENT_SUM',
+    'POS_NAME_CONTRACT_STATUS_Returned to the store_MEAN',
+    'CC_AMT_BALANCE_VAR',
+    'CNT_FAM_MEMBERS',
+    'FLOORSMAX_AVG',
+    'REFUSED_RATE_DOWN_PAYMENT_MEAN',
+    'NAME_INCOME_TYPE_State servant',
+    'PREV_NAME_CONTRACT_TYPE_Consumer loans_MEAN',
+    'PREV_NAME_GOODS_CATEGORY_XNA_MEAN',
+    'NONLIVINGAPARTMENTS_AVG',
+    'CC_AMT_BALANCE_MIN',
+    'ORGANIZATION_TYPE_Industry: type 9'
+    ]
+    df= df.drop(dropcolum,axis=1)
+    
     train_df = df[df['TARGET'].notnull()]
-    test_df = df[df['TARGET'].isnull()]
+    test_df = df[df['TARGET'].isnull()]  
     
     print("Starting LightGBM. Train shape: {}, test shape: {}".format(train_df.shape, test_df.shape))
     del df
@@ -429,7 +702,7 @@ def kfold_lightgbm(df, num_folds, stratified = False, debug= False):
 
         clf = LGBMClassifier(
             nthread=4,
-            scale_pos_weight = 1.3,
+            #scale_pos_weight = 1.3,
             n_estimators=10000,
             learning_rate=0.02,
             num_leaves=34,
@@ -441,8 +714,7 @@ def kfold_lightgbm(df, num_folds, stratified = False, debug= False):
             min_split_gain=0.0222415,
             min_child_weight=39.3259775,
             silent=-1,
-            verbose=-1, )
-       
+            verbose=-1, )       
 
         clf.fit(train_x, train_y, eval_set=[(train_x, train_y), (valid_x, valid_y)], 
             eval_metric= 'auc', verbose= 1000, early_stopping_rounds= 200)
@@ -470,7 +742,16 @@ def kfold_lightgbm(df, num_folds, stratified = False, debug= False):
 
 # Display/plot feature importance
 def display_importances(feature_importance_df_):
+    file_name = 'features importance output.csv'
+    
+    cols = feature_importance_df_[["feature", "importance"]].groupby("feature").mean().sort_values(by="importance", ascending=False).index
+    cols1 = feature_importance_df_[["feature", "importance"]].groupby("feature").mean().sort_values(by="importance", ascending=False)
+    best_features = feature_importance_df_.loc[feature_importance_df_.feature.isin(cols)]
+    cols1.to_csv(file_name, sep=',', encoding='utf-8')
+    
     cols = feature_importance_df_[["feature", "importance"]].groupby("feature").mean().sort_values(by="importance", ascending=False)[:40].index
+
+    
     best_features = feature_importance_df_.loc[feature_importance_df_.feature.isin(cols)]
     plt.figure(figsize=(8, 10))
     sns.barplot(x="importance", y="feature", data=best_features.sort_values(by="importance", ascending=False))
